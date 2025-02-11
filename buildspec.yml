@@ -1,0 +1,28 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.9
+    commands:
+      - echo "Installing dependencies..."
+      - pip install awscli --upgrade
+
+  pre_build:
+    commands:
+      - echo "Pre-build phase..."
+      - aws --version
+      - echo "Validating CloudFormation templates..."
+      - for template in templates/*.yml; do aws cloudformation validate-template --template-body file://$template || exit 1; done
+
+  build:
+    commands:
+      - echo "Build phase..."
+      - echo "Uploading CloudFormation templates to S3..."
+      - aws s3 cp templates/ s3://aws-organization-creation-cloudformation-code-bucket/templates/ --recursive
+
+  post_build:
+    commands:
+      - echo "Post-build phase..."
+      - echo "Deploying CloudFormation stacks..."
+      - bash scripts/deploy.sh
