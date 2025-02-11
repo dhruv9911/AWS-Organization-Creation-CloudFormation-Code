@@ -172,8 +172,8 @@ Resources:
                 Provider: GitHub
                 Version: 1
               Configuration:
-                Owner: !Select [1, !Split ["/", !Select [2, !Split ["https://github.com/", !Ref GitHubRepo]]]]
-                Repo: !Select [0, !Split ["/", !Select [2, !Split ["https://github.com/", !Ref GitHubRepo]]]]
+                Owner: !Select [0, !Split ["/", !Select [2, !Split ["github.com/", !Ref GitHubRepo]]]]
+                Repo: !Select [1, !Split ["/", !Select [2, !Split ["github.com/", !Ref GitHubRepo]]]]
                 Branch: !Ref GitHubBranch
                 OAuthToken: !Ref GitHubToken
               OutputArtifacts:
