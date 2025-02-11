@@ -1,0 +1,593 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS Landing Zone with Shared Networking, Logging, Security Accounts, and AWS SSO
+
+Parameters:
+  MasterAccountId:
+    Type: String
+    Description: The AWS Account ID of the Master Account.
+    Default: 332734770702
+
+  # ExitingOrg:
+  #   Type: String
+  #   Description: Existing AWS Organization ID.
+  #   Default: o-jli6kd9es0
+
+  # RootID:
+  #   Type: String
+  #   Description: Existing AWS Organization Root ID.
+  #   Default: r-l91c
+
+  CloudTrailLogBucket:
+    Type: String
+    Description: Existing AWS Organization Root ID.
+    Default: aws-landing-zone-cloudtrail-access-logs-332734770702
+
+  LoggingAccountEmail:
+    Type: String
+    Description: Email address for the Logging Account.
+    Default: loggylandingzone@gmail.com
+
+  SecurityAccountEmail:
+    Type: String
+    Description: Email address for the Security Account.
+    Default: slandingzone@gmail.com
+
+  SharedNetworkingAccountEmail:
+    Type: String
+    Description: Email address for the Shared Networking Account.
+    Default: sharednetworkinglandingzone@gmail.com 
+
+  VPCCidrBlock:
+    Type: String
+    Default: 11.0.0.0/16
+    Description: CIDR block for the VPC.
+
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 11.0.1.0/24
+    Description: CIDR block for Public Subnet 1.
+
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 11.0.2.0/24
+    Description: CIDR block for Public Subnet 2.
+
+  PublicSubnet3Cidr:
+    Type: String
+    Default: 11.0.3.0/24
+    Description: CIDR block for Public Subnet 3.
+
+  PrivateSubnet1Cidr:
+    Type: String
+    Default: 11.0.4.0/24
+    Description: CIDR block for Private Subnet 1.
+
+  PrivateSubnet2Cidr:
+    Type: String
+    Default: 11.0.5.0/24
+    Description: CIDR block for Private Subnet 2.
+
+  PrivateSubnet3Cidr:
+    Type: String
+    Default: 11.0.6.0/24
+    Description: CIDR block for Private Subnet 3.
+
+#  WorkloadAccountEmail:
+#    Type: String
+#    Description: Email address for the Workload Account.
+
+
+Resources:
+  MyOrganization:
+    Type: AWS::Organizations::Organization
+    Properties:
+      FeatureSet: ALL  # This enables all policy types
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EnableSCPPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - organizations:EnablePolicyType
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+  
+  EnableSCPLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRoleForfetchRootID.Arn
+      Runtime: python3.9
+      Timeout: 30
+      Environment:
+        Variables:
+          ROOT_ID: !Ref RootID
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          import http.client
+
+          def lambda_handler(event, context):
+              client = boto3.client('organizations')
+              root_id = os.environ.get('ROOT_ID')
+
+              if root_id is None:
+                  print("Error: ROOT_ID environment variable not set.")
+                  cfn_response(event, context, "FAILED", {"Error": "ROOT_ID environment variable not set."})
+                  return
+
+              try:
+                  # Enable SCP policy type
+                  response = client.enable_policy_type(
+                      RootId=root_id,
+                      PolicyType='SERVICE_CONTROL_POLICY'
+                  )
+
+                  # Send success response to CloudFormation
+                  response_data = {
+                      "Status": "SUCCESS",
+                      "Message": "SCP Enabled Successfully!",
+                      "Response": response
+                  }
+                  cfn_response(event, context, "SUCCESS", response_data)
+
+              except Exception as e:
+                  print(f"Error enabling policy type: {e}")
+                  cfn_response(event, context, "FAILED", {"Error": str(e)})
+
+
+          def cfn_response(event, context, status, data):
+              response_body = {
+                  "RequestType": event["RequestType"],
+                  "ResponseURL": event["ResponseURL"],
+                  "StackId": event["StackId"],
+                  "RequestId": event["RequestId"],
+                  "LogicalResourceId": event["LogicalResourceId"],
+                  "PhysicalResourceId": data.get("PhysicalResourceId", context.log_stream_name),
+                  "Status": status,
+                  "Data": data,
+              }
+
+              json_response_body = json.dumps(response_body)
+
+              print(f"Response Body: {json_response_body}")
+
+              try:
+                  # Parse the ResponseURL to extract host and path
+                  url_parts = event["ResponseURL"].split("/")
+                  host = url_parts[2]
+                  path = "/" + "/".join(url_parts[3:])
+
+                  # Create an HTTP connection
+                  connection = http.client.HTTPSConnection(host)
+                  headers = {"Content-Type": ""}
+
+                  # Send the PUT request
+                  connection.request("PUT", path, body=json_response_body, headers=headers)
+                  response = connection.getresponse()
+                  print(f"CloudFormation response status: {response.status}")
+                  print(f"CloudFormation response reason: {response.reason}")
+                  connection.close()
+              except Exception as e:
+                  print(f"Error sending CloudFormation response: {e}")                    
+  EnableSCPInvoke:
+    Type: Custom::EnableSCP
+    Properties:
+#      FunctionName: !Ref EnableSCPLambda
+      ServiceToken: !GetAtt EnableSCPLambda.Arn
+      Payload:
+        RootId: !Ref RootID
+
+  RootID:
+    Type: Custom::GetRootId
+    Properties:
+      ServiceToken: !GetAtt GetRootIdLambda.Arn
+    DependsOn: MyOrganization  # Ensure the organization is created first
+
+  # Lambda Function to Get Root ID
+  GetRootIdLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRoleForfetchRootID.Arn
+      Runtime: python3.9
+      Timeout: 30
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import http.client
+
+          def lambda_handler(event, context):
+              print("Received event: " + json.dumps(event))  # Log the incoming event
+              org_client = boto3.client('organizations')
+              response_data = {}
+              physical_resource_id = None
+
+              try:
+                  if event["RequestType"] in ["Create", "Update"]:
+                      print("Fetching Root ID...")
+                      roots = org_client.list_roots()['Roots']
+                      if roots:
+                          root_id = roots[0]['Id']
+                          print(f"Root ID found: {root_id}")
+                          response_data = {"RootId": root_id}
+                          physical_resource_id = root_id  # Use RootId as the physical resource ID
+                      else:
+                          raise Exception("No roots found in the organization.")
+
+                  elif event["RequestType"] == "Delete":
+                      print("Delete request - no action required.")
+
+                  # Send success response to CloudFormation
+                  cfn_response(event, context, "SUCCESS", response_data, physical_resource_id)
+
+              except Exception as e:
+                  print(f"Error: {e}")
+                  cfn_response(event, context, "FAILED", {"Error": str(e)})
+
+
+          def cfn_response(event, context, status, data, physical_resource_id=None):
+              response_body = {
+                  "RequestType": event["RequestType"],
+                  "ResponseURL": event["ResponseURL"],
+                  "StackId": event["StackId"],
+                  "RequestId": event["RequestId"],
+                  "LogicalResourceId": event["LogicalResourceId"],
+                  "PhysicalResourceId": physical_resource_id or context.log_stream_name,
+                  "Status": status,
+                  "Data": data,
+              }
+
+              json_response_body = json.dumps(response_body)
+
+              print(f"Response Body: {json_response_body}")
+
+              try:
+                  # Parse the ResponseURL to extract host and path
+                  url_parts = event["ResponseURL"].split("/")
+                  host = url_parts[2]
+                  path = "/" + "/".join(url_parts[3:])
+
+                  # Create an HTTP connection
+                  connection = http.client.HTTPSConnection(host)
+                  headers = {"Content-Type": ""}
+
+                  # Send the PUT request
+                  connection.request("PUT", path, body=json_response_body, headers=headers)
+                  response = connection.getresponse()
+                  print(f"CloudFormation response status: {response.status}")
+                  print(f"CloudFormation response reason: {response.reason}")
+                  connection.close()
+              except Exception as e:
+                  print(f"Error sending CloudFormation response: {e}")
+
+  # IAM Role for Lambda Function
+  LambdaExecutionRoleForfetchRootID:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GetRootIdPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - organizations:ListRoots
+                  - organizations:ListParents
+                  - organizations:ListChildren
+                  - organizations:ListAccountsForParent
+                  - organizations:ListAccounts
+                  - organizations:DescribeOrganization
+                  - organizations:DescribeAccount
+                  - organizations:ListAWSServiceAccessForOrganizatio
+                Resource: "*"
+              - Effect: Allow  # Allow logging
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow  # Allow logging
+                Action:
+                  - cloudformation:*
+                Resource: "*"
+
+
+  # Create Organizational Units (OUs)
+  SecurityOU:
+    Type: AWS::Organizations::OrganizationalUnit
+    Properties:
+      ParentId: !Ref RootID
+      Name: Security
+    DependsOn: [MyOrganization, RootID, EnableSCPInvoke]
+
+  LoggingOU:
+    Type: AWS::Organizations::OrganizationalUnit
+    Properties:
+      ParentId: !Ref RootID
+      Name: Logging
+    DependsOn: [MyOrganization, RootID, EnableSCPInvoke]
+
+  SharedNetworkingOU:
+    Type: AWS::Organizations::OrganizationalUnit
+    Properties:
+      ParentId: !Ref RootID
+      Name: SharedNetworking
+    DependsOn: [MyOrganization, RootID, EnableSCPInvoke]
+
+#  WorkloadsOU:
+#    Type: AWS::Organizations::OrganizationalUnit
+#    Properties:
+#      ParentId: !Ref MyOrganization
+#      Name: Workloads
+
+  # SCP to restrict regions to ap-south-1
+  RestrictRegionSCP:
+    Type: AWS::Organizations::Policy
+    Properties:
+      Type: SERVICE_CONTROL_POLICY
+      Content:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Action: '*'
+            Resource: '*'
+            Condition:
+              StringNotEquals:
+                aws:RequestedRegion: ap-south-1
+      Description: Restrict all actions to ap-south-1 region
+      Name: RestrictRegion
+      TargetIds:
+        - !Ref SecurityOU
+        - !Ref LoggingOU
+        - !Ref SharedNetworkingOU
+#        - !Ref WorkloadsOU
+    DependsOn: [MyOrganization, RootID, EnableSCPInvoke]
+
+
+  # SCP to prevent creation of public S3 buckets
+  PreventPublicS3BucketsSCP:
+    Type: AWS::Organizations::Policy
+    Properties:
+      Type: SERVICE_CONTROL_POLICY
+      Content:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Action: s3:PutBucketPublicAccessBlock
+            Resource: '*'
+            Condition:
+              StringNotEquals:
+                s3:x-amz-acl: private
+      Description: Prevent creation of public S3 buckets
+      Name: PreventPublicS3Buckets
+      TargetIds:
+        - !Ref SecurityOU
+        - !Ref LoggingOU
+        - !Ref SharedNetworkingOU
+#        - !Ref WorkloadsOU
+    DependsOn: [MyOrganization, RootID, EnableSCPInvoke]
+
+  # Create Logging Account
+  LoggingAccount:
+    Type: AWS::Organizations::Account
+    Properties:
+      AccountName: LoggingAccount
+      Email: !Ref LoggingAccountEmail
+      RoleName: OrganizationAccountAccessRole
+      ParentIds:
+        - !Ref LoggingOU
+
+
+  # Create Security Account
+  SecurityAccount:
+    Type: AWS::Organizations::Account
+    Properties:
+      AccountName: SecurityAccount
+      Email: !Ref SecurityAccountEmail
+      RoleName: OrganizationAccountAccessRole
+      ParentIds:
+        - !Ref SecurityOU
+
+
+  # Create Shared Networking Account
+  SharedNetworkingAccount:
+    Type: AWS::Organizations::Account
+    Properties:
+      AccountName: SharedNetworkingAccount
+      Email: !Ref SharedNetworkingAccountEmail
+      RoleName: OrganizationAccountAccessRole
+      ParentIds:
+        - !Ref SharedNetworkingOU
+
+  # Create Workload Account
+#  WorkloadAccount:
+#    Type: AWS::Organizations::Account
+#    Properties:
+#      AccountName: WorkloadAccount
+#      Email: !Ref WorkloadAccountEmail
+#      RoleName: OrganizationAccountAccessRole
+#      ParentIds:
+#        - !Ref WorkloadsOU
+
+  # Create VPC in Shared Networking Account
+  SharedNetworkingVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCCidrBlock
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  # Create Subnets in Shared Networking Account
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SharedNetworkingVPC
+      CidrBlock: !Ref PublicSubnet1Cidr
+      AvailabilityZone: ap-south-1a
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SharedNetworkingVPC
+      CidrBlock: !Ref PublicSubnet2Cidr
+      AvailabilityZone: ap-south-1b
+
+  PublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SharedNetworkingVPC
+      CidrBlock: !Ref PublicSubnet3Cidr
+      AvailabilityZone: ap-south-1c
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SharedNetworkingVPC
+      CidrBlock: !Ref PrivateSubnet1Cidr
+      AvailabilityZone: ap-south-1a
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SharedNetworkingVPC
+      CidrBlock: !Ref PrivateSubnet2Cidr
+      AvailabilityZone: ap-south-1b
+
+  PrivateSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SharedNetworkingVPC
+      CidrBlock: !Ref PrivateSubnet3Cidr
+      AvailabilityZone: ap-south-1c
+
+  # Share VPC Subnets with all accounts using RAM
+  ShareSubnets:
+    Type: AWS::RAM::ResourceShare
+    Properties:
+      Name: SharedNetworkingSubnets
+      Principals:
+#        - !Sub "arn:aws:organizations::${MasterAccountId}:organization/${MyOrganization}"
+#        - !Sub "arn:aws:organizations::${MasterAccountId}:organization/${ExitingOrg}"
+        - !Sub "arn:aws:organizations::${MasterAccountId}:organization/${!GetAtt MyOrganization.Id}"
+      ResourceArns:
+        - !Sub "arn:aws:ec2:ap-south-1:${SharedNetworkingAccount}:subnet/${PublicSubnet1}"
+        - !Sub "arn:aws:ec2:ap-south-1:${SharedNetworkingAccount}:subnet/${PublicSubnet2}"
+        - !Sub "arn:aws:ec2:ap-south-1:${SharedNetworkingAccount}:subnet/${PublicSubnet3}"
+        - !Sub "arn:aws:ec2:ap-south-1:${SharedNetworkingAccount}:subnet/${PrivateSubnet1}"
+        - !Sub "arn:aws:ec2:ap-south-1:${SharedNetworkingAccount}:subnet/${PrivateSubnet2}"
+        - !Sub "arn:aws:ec2:ap-south-1:${SharedNetworkingAccount}:subnet/${PrivateSubnet3}"
+
+
+
+  # Enable CloudTrail and send logs to Logging Account
+  CloudTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: CloudTrailBucketPolicy
+    Properties:
+      IsLogging: true
+      S3BucketName: !Ref CloudTrailLogsBucket
+      IncludeGlobalServiceEvents: true
+      IsMultiRegionTrail: false
+      EnableLogFileValidation: true
+
+  CloudTrailLogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref CloudTrailLogBucket
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # Share the CloudTrail bucket with the Logging Account
+  CloudTrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CloudTrailLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "${CloudTrailLogsBucket.Arn}/AWSLogs/${AWS::AccountId}/*"
+    #        Condition:
+    #          StringEqualsIfExists:
+    #            s3:x-amz-acl: bucket-owner-full-control
+          - Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt CloudTrailLogsBucket.Arn
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${LoggingAccount}:root"
+            Action: 
+              - s3:Get*
+              - s3:List*
+            Resource: !Sub "${CloudTrailLogsBucket.Arn}/*"
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${LoggingAccount}:root"
+            Action: s3:Put*
+            Resource: !Sub "${CloudTrailLogsBucket.Arn}/*"
+
+
+
+  # Enable GuardDuty in Security Account
+  GuardDutyDetector:
+    Type: AWS::GuardDuty::Detector
+    Properties:
+      Enable: true
+
+
+Outputs:
+  OrganizationId:
+    Description: The ID of the AWS Organization
+    Value: !Ref MyOrganization
+
+  LoggingAccountId:
+    Description: The ID of the Logging Account
+    Value: !Ref LoggingAccount
+
+  SecurityAccountId:
+    Description: The ID of the Security Account
+    Value: !Ref SecurityAccount
+
+  SharedNetworkingAccountId:
+    Description: The ID of the Shared Networking Account
+    Value: !Ref SharedNetworkingAccount
+
+
+  RootID:
+    Description: The ID of the Root
+    Value: !GetAtt RootID.RootId # Access the Root ID
