@@ -19,7 +19,7 @@ Parameters:
   ArtifactBucketName:
     Type: String
     Description: Name of the S3 bucket to store artifacts
-    Default: my-cloudformation-artifacts
+    Default: aws-organization-creation-cloudformation-code-bucket
 
 Resources:
   # S3 Bucket for Artifacts
@@ -74,6 +74,67 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: "*"
+
+  # Lambda Function to Parse GitHub Repo URL
+  GitHubRepoParserFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Timeout: 30
+      Code:
+        ZipFile: |
+          import json
+          import urllib.parse
+
+          def lambda_handler(event, context):
+              print("Received event: " + json.dumps(event))
+              repo_url = event["ResourceProperties"]["GitHubRepo"]
+              parsed_url = urllib.parse.urlparse(repo_url)
+              path_parts = parsed_url.path.strip("/").split("/")
+              owner = path_parts[0]
+              repo = path_parts[1].replace(".git", "")
+
+              response_data = {
+                  "Owner": owner,
+                  "Repo": repo
+              }
+
+              return {
+                  "PhysicalResourceId": context.log_stream_name,
+                  "Data": response_data
+              }
+
+  # IAM Role for Lambda Function
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaBasicExecution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  # Custom Resource to Parse GitHub Repo URL
+  GitHubRepoParser:
+    Type: Custom::GitHubRepoParser
+    Properties:
+      ServiceToken: !GetAtt GitHubRepoParserFunction.Arn
+      GitHubRepo: !Ref GitHubRepo
 
   # CodeBuild Project
   CodeBuildProject:
@@ -172,8 +233,8 @@ Resources:
                 Provider: GitHub
                 Version: 1
               Configuration:
-                Owner: !Select [0, !Split ["/", !Select [2, !Split ["github.com/", !Ref GitHubRepo]]]]
-                Repo: !Select [1, !Split ["/", !Select [2, !Split ["github.com/", !Ref GitHubRepo]]]]
+                Owner: !GetAtt GitHubRepoParser.Data.Owner
+                Repo: !GetAtt GitHubRepoParser.Data.Repo
                 Branch: !Ref GitHubBranch
                 OAuthToken: !Ref GitHubToken
               OutputArtifacts:
