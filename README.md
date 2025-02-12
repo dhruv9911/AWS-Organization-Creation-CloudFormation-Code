@@ -20,3 +20,7 @@ aws cloudformation create-stack \
       ParameterKey=GitHubToken,ParameterValue=ghp_ \
       ParameterKey=ArtifactBucketName,ParameterValue=aws-organization-creation-cloudformation-code-bucket \
   --capabilities CAPABILITY_NAMED_IAM
+
+
+
+After that need to configure Source in AWS Codepipeline once again
