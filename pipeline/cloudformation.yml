@@ -87,24 +87,66 @@ Resources:
         ZipFile: |
           import json
           import urllib.parse
+          import http.client
 
           def lambda_handler(event, context):
               print("Received event: " + json.dumps(event))
-              repo_url = event["ResourceProperties"]["GitHubRepo"]
-              parsed_url = urllib.parse.urlparse(repo_url)
-              path_parts = parsed_url.path.strip("/").split("/")
-              owner = path_parts[0]
-              repo = path_parts[1].replace(".git", "")
 
-              response_data = {
-                  "Owner": owner,
-                  "Repo": repo
-              }
+              try:
+                  # Extract GitHub repo URL from the event
+                  repo_url = event["ResourceProperties"]["GitHubRepo"]
+                  parsed_url = urllib.parse.urlparse(repo_url)
+                  path_parts = parsed_url.path.strip("/").split("/")
+                  owner = path_parts[0]
+                  repo = path_parts[1].replace(".git", "")
 
-              return {
+                  # Prepare response data
+                  response_data = {
+                      "Owner": owner,
+                      "Repo": repo
+                  }
+
+                  # Send success response to CloudFormation
+                  send_response(event, context, "SUCCESS", response_data)
+
+              except Exception as e:
+                  print(f"Error: {e}")
+                  send_response(event, context, "FAILED", {"Error": str(e)})
+
+
+          def send_response(event, context, status, data):
+              response_body = {
+                  "Status": status,
+                  "Reason": "See the details in CloudWatch Log Stream: " + context.log_stream_name,
                   "PhysicalResourceId": context.log_stream_name,
-                  "Data": response_data
+                  "StackId": event["StackId"],
+                  "RequestId": event["RequestId"],
+                  "LogicalResourceId": event["LogicalResourceId"],
+                  "Data": data
               }
+
+              json_response_body = json.dumps(response_body)
+
+              print(f"Response Body: {json_response_body}")
+
+              try:
+                  # Parse the ResponseURL to extract host and path
+                  url_parts = event["ResponseURL"].split("/")
+                  host = url_parts[2]
+                  path = "/" + "/".join(url_parts[3:])
+
+                  # Create an HTTP connection
+                  connection = http.client.HTTPSConnection(host)
+                  headers = {"Content-Type": ""}
+
+                  # Send the PUT request
+                  connection.request("PUT", path, body=json_response_body, headers=headers)
+                  response = connection.getresponse()
+                  print(f"CloudFormation response status: {response.status}")
+                  print(f"CloudFormation response reason: {response.reason}")
+                  connection.close()
+              except Exception as e:
+                  print(f"Error sending CloudFormation response: {e}")
 
   # IAM Role for Lambda Function
   LambdaExecutionRole:
@@ -127,6 +169,11 @@ Resources:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
                 Resource: "*"
 
   # Custom Resource to Parse GitHub Repo URL
