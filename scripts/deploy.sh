@@ -9,8 +9,9 @@ echo "Downloading templates from S3..."
 aws s3 cp s3://$ARTIFACT_BUCKET/templates/ ./templates/ --recursive
 
 # Deploy Organization Stack
+echo "Deploying Organization Stack..."
 aws cloudformation deploy \
-  --template-file s3://$ARTIFACT_BUCKET/templates/organization.yml \
+  --template-file ./templates/organization.yml \
   --stack-name $STACK_NAME_PREFIX-organization \
   --capabilities CAPABILITY_NAMED_IAM
 
