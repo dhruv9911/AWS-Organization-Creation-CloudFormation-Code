@@ -122,7 +122,7 @@ Resources:
                   "StackId": event["StackId"],
                   "RequestId": event["RequestId"],
                   "LogicalResourceId": event["LogicalResourceId"],
-                  "Data": data
+                  "Data": data  # Ensure the response includes the Data attribute
               }
 
               json_response_body = json.dumps(response_body)
