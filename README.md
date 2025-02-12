@@ -11,11 +11,12 @@ Use Command:
 
 
 aws cloudformation create-stack \
-  --stack-name MyCICDPipeline \
+  --stack-name MyCICDPipeline1 \
   --template-body file://template.yml \
   --parameters \
-      ParameterKey=GitHubRepo,ParameterValue=https://github.com/dhruv9911/AWS-Organization-Creation-CloudFormation-Code.git \
+      ParameterKey=GitHubOwner,ParameterValue=dhruv9911 \
+      ParameterKey=GitHubRepoName,ParameterValue=https://github.com/dhruv9911/AWS-Organization-Creation-CloudFormation-Code.git \
       ParameterKey=GitHubBranch,ParameterValue=main \
-      ParameterKey=GitHubToken,ParameterValue=<GitHub Token> \
+      ParameterKey=GitHubToken,ParameterValue=ghp_ \
       ParameterKey=ArtifactBucketName,ParameterValue=aws-organization-creation-cloudformation-code-bucket \
   --capabilities CAPABILITY_NAMED_IAM
