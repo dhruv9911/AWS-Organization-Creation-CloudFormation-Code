@@ -4,6 +4,10 @@
 ARTIFACT_BUCKET="aws-organization-creation-cloudformation-code-bucket"
 STACK_NAME_PREFIX="my-stack"
 
+# Download templates from S3 to the local working directory
+echo "Downloading templates from S3..."
+aws s3 cp s3://$ARTIFACT_BUCKET/templates/ ./templates/ --recursive
+
 # Deploy Organization Stack
 aws cloudformation deploy \
   --template-file s3://$ARTIFACT_BUCKET/templates/organization.yml \
