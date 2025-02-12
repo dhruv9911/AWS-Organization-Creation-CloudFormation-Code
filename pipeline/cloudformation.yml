@@ -2,9 +2,13 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Template to create AWS CodePipeline and CodeBuild for deploying CloudFormation templates.
 
 Parameters:
-  GitHubRepo:
+  GitHubOwner:
     Type: String
-    Description: GitHub repository URL (e.g., https://github.com/username/repo-name.git)
+    Description: GitHub repository owner (e.g., dhruv9911)
+  
+  GitHubRepoName:
+    Type: String
+    Description: GitHub repository name (e.g., AWS-Organization-Creation-CloudFormation-Code)
   
   GitHubBranch:
     Type: String
@@ -74,114 +78,6 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: "*"
-
-  # Lambda Function to Parse GitHub Repo URL
-  GitHubRepoParserFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      Handler: index.lambda_handler
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: python3.9
-      Timeout: 30
-      Code:
-        ZipFile: |
-          import json
-          import urllib.parse
-          import http.client
-
-          def lambda_handler(event, context):
-              print("Received event: " + json.dumps(event))
-
-              try:
-                  # Extract GitHub repo URL from the event
-                  repo_url = event["ResourceProperties"]["GitHubRepo"]
-                  parsed_url = urllib.parse.urlparse(repo_url)
-                  path_parts = parsed_url.path.strip("/").split("/")
-                  owner = path_parts[0]
-                  repo = path_parts[1].replace(".git", "")
-
-                  # Prepare response data
-                  response_data = {
-                      "Owner": owner,
-                      "Repo": repo
-                  }
-
-                  # Send success response to CloudFormation
-                  send_response(event, context, "SUCCESS", response_data)
-
-              except Exception as e:
-                  print(f"Error: {e}")
-                  send_response(event, context, "FAILED", {"Error": str(e)})
-
-
-          def send_response(event, context, status, data):
-              response_body = {
-                  "Status": status,
-                  "Reason": "See the details in CloudWatch Log Stream: " + context.log_stream_name,
-                  "PhysicalResourceId": context.log_stream_name,
-                  "StackId": event["StackId"],
-                  "RequestId": event["RequestId"],
-                  "LogicalResourceId": event["LogicalResourceId"],
-                  "Data": data  # Ensure the response includes the Data attribute
-              }
-
-              json_response_body = json.dumps(response_body)
-
-              print(f"Response Body: {json_response_body}")
-
-              try:
-                  # Parse the ResponseURL to extract host and path
-                  url_parts = event["ResponseURL"].split("/")
-                  host = url_parts[2]
-                  path = "/" + "/".join(url_parts[3:])
-
-                  # Create an HTTP connection
-                  connection = http.client.HTTPSConnection(host)
-                  headers = {"Content-Type": ""}
-
-                  # Send the PUT request
-                  connection.request("PUT", path, body=json_response_body, headers=headers)
-                  response = connection.getresponse()
-                  print(f"CloudFormation response status: {response.status}")
-                  print(f"CloudFormation response reason: {response.reason}")
-                  connection.close()
-              except Exception as e:
-                  print(f"Error sending CloudFormation response: {e}")
-
-  # IAM Role for Lambda Function
-  LambdaExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: LambdaBasicExecution
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: "*"
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                Resource: "*"
-
-  # Custom Resource to Parse GitHub Repo URL
-  GitHubRepoParser:
-    Type: Custom::GitHubRepoParser
-    Properties:
-      ServiceToken: !GetAtt GitHubRepoParserFunction.Arn
-      GitHubRepo: !Ref GitHubRepo
 
   # CodeBuild Project
   CodeBuildProject:
@@ -280,8 +176,8 @@ Resources:
                 Provider: GitHub
                 Version: 1
               Configuration:
-                Owner: !GetAtt GitHubRepoParser.Data.Owner
-                Repo: !GetAtt GitHubRepoParser.Data.Repo
+                Owner: !Ref GitHubOwner
+                Repo: !Ref GitHubRepoName
                 Branch: !Ref GitHubBranch
                 OAuthToken: !Ref GitHubToken
               OutputArtifacts:
