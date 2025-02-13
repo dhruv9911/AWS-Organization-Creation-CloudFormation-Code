@@ -1,0 +1,290 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS Landing Zone with Shared Networking, Logging, Security Accounts, and AWS SSO
+
+Parameters:
+  Username:
+    Type: String
+    Description: The username for the new user.
+    Default: Adminuser1
+
+  Password:
+    Type: String
+    Description: The one-time password for the new user.
+    Default: Birlasoft@987#
+    NoEcho: true
+
+  EmailAddress:
+    Type: String
+    Description: The email address for the new user.
+    Default: puspasing346@gmail.com
+
+  FirstName:
+    Type: String
+    Description: The first name for the new user.
+    Default: Admin
+
+  LastName:
+    Type: String
+    Description: The last name for the new user.
+    Default: User1
+
+  DisplayName:
+    Type: String
+    Description: The display name for the new user.
+    Default: Admin User1
+
+  GroupName:
+    Type: String
+    Description: The name of the group to create or use.
+    Default: AdminGroup
+
+  PermissionSetName:
+    Type: String
+    Description: The name of the permission set to create or use.
+    Default: AdministratorAccess
+
+  PermissionSetRole:
+    Type: String
+    Description: The managed policy ARN to attach to the permission set.
+    Default: arn:aws:iam::aws:policy/AdministratorAccess
+    AllowedValues:
+      - arn:aws:iam::aws:policy/AdministratorAccess
+      - arn:aws:iam::aws:policy/ReadOnlyAccess
+      - arn:aws:iam::aws:policy/PowerUserAccess
+
+Resources:
+  # Lambda Function to Handle AWS SSO Operations
+  SSOHandlerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt SSOHandlerRole.Arn
+      Runtime: python3.9
+      Timeout: 300
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import http.client
+          import urllib.parse
+
+          def lambda_handler(event, context):
+              sso_admin = boto3.client('sso-admin')
+              identity_store = boto3.client('identitystore')
+              organizations = boto3.client('organizations')
+
+              try:
+                  # Step 1: Check if IAM Identity Center is enabled
+                  instances = sso_admin.list_instances()['Instances']
+                  if not instances:
+                      raise Exception("IAM Identity Center is not enabled. Please enable it manually in the AWS Management Console.")
+
+                  sso_instance = instances[0]
+                  instance_arn = sso_instance['InstanceArn']
+                  identity_store_id = sso_instance['IdentityStoreId']
+
+                  # Step 2: Check if Permission Set Already Exists
+                  permission_set_name = event['ResourceProperties']['PermissionSetName']
+                  permission_set_arn = None
+
+                  # List all permission sets
+                  permission_sets = sso_admin.list_permission_sets(InstanceArn=instance_arn)['PermissionSets']
+                  for permission_set in permission_sets:
+                      permission_set_details = sso_admin.describe_permission_set(
+                          InstanceArn=instance_arn,
+                          PermissionSetArn=permission_set
+                      )['PermissionSet']
+                      if permission_set_details['Name'] == permission_set_name:
+                          permission_set_arn = permission_set
+                          break
+
+                  # If permission set does not exist, create it
+                  if not permission_set_arn:
+                      permission_set = sso_admin.create_permission_set(
+                          Name=permission_set_name,
+                          InstanceArn=instance_arn,
+                          Description="Permission set for administrative access"
+                      )
+                      permission_set_arn = permission_set['PermissionSet']['PermissionSetArn']
+
+                      # Attach Managed Policy to Permission Set
+                      sso_admin.attach_managed_policy_to_permission_set(
+                          InstanceArn=instance_arn,
+                          PermissionSetArn=permission_set_arn,
+                          ManagedPolicyArn=event['ResourceProperties']['PermissionSetRole']
+                      )
+
+                  # Step 3: Check if Group Already Exists
+                  group_name = event['ResourceProperties']['GroupName']
+                  group_id = None
+
+                  # List all groups
+                  groups = identity_store.list_groups(IdentityStoreId=identity_store_id)['Groups']
+                  for group in groups:
+                      if group['DisplayName'] == group_name:
+                          group_id = group['GroupId']
+                          break
+
+                  # If group does not exist, create it
+                  if not group_id:
+                      admin_group = identity_store.create_group(
+                          IdentityStoreId=identity_store_id,
+                          DisplayName=group_name,
+                          Description="Admin Group for AWS SSO"
+                      )
+                      group_id = admin_group['GroupId']
+
+                  # Step 4: Check if User Already Exists
+                  username = event['ResourceProperties']['Username']
+                  user_id = None
+
+                  # List all users
+                  users = identity_store.list_users(IdentityStoreId=identity_store_id)['Users']
+                  for user in users:
+                      if user['UserName'] == username:
+                          user_id = user['UserId']
+                          break
+
+                  # If user does not exist, create it
+                  if not user_id:
+                      client_user = identity_store.create_user(
+                          IdentityStoreId=identity_store_id,
+                          UserName=username,
+                          DisplayName=event['ResourceProperties']['DisplayName'],
+                          Name={
+                              "GivenName": event['ResourceProperties']['FirstName'],
+                              "FamilyName": event['ResourceProperties']['LastName']
+                          },
+                          Emails=[{"Value": event['ResourceProperties']['EmailAddress'], "Type": "work"}]
+                      )
+                      user_id = client_user['UserId']
+
+                  # Step 5: Check if User is Already a Member of the Group
+                  is_member = False
+                  memberships = identity_store.list_group_memberships(
+                      IdentityStoreId=identity_store_id,
+                      GroupId=group_id
+                  )['GroupMemberships']
+                  for membership in memberships:
+                      if membership['MemberId']['UserId'] == user_id:
+                          is_member = True
+                          break
+
+                  # If user is not a member, add them to the group
+                  if not is_member:
+                      identity_store.create_group_membership(
+                          IdentityStoreId=identity_store_id,
+                          GroupId=group_id,
+                          MemberId={"UserId": user_id}
+                      )
+
+                  # Step 6: Attach Permission Set to All Accounts (including Management Account)
+                  accounts = organizations.list_accounts()['Accounts']
+                  for account in accounts:
+                      sso_admin.create_account_assignment(
+                          InstanceArn=instance_arn,
+                          PermissionSetArn=permission_set_arn,
+                          PrincipalId=group_id,
+                          PrincipalType="GROUP",
+                          TargetId=account['Id'],
+                          TargetType="AWS_ACCOUNT"
+                      )
+
+                  # Step 7: Output SSO Login URL and One-Time Password
+                  sso_login_url = f"https://{instance_arn.split('/')[-1]}.awsapps.com/start"
+                  one_time_password = event['ResourceProperties']['Password']
+
+                  # Send success response to CloudFormation
+                  send_response(event, context, "SUCCESS", {
+                      "SSOLoginURL": sso_login_url,
+                      "OneTimePassword": one_time_password
+                  })
+
+              except Exception as e:
+                  print(f"Error: {e}")
+                  send_response(event, context, "FAILED", {"Error": str(e)})
+
+
+          def send_response(event, context, status, data):
+              response_body = {
+                  "Status": status,
+                  "Reason": "See the details in CloudWatch Log Stream: " + context.log_stream_name,
+                  "PhysicalResourceId": context.log_stream_name,
+                  "StackId": event["StackId"],
+                  "RequestId": event["RequestId"],
+                  "LogicalResourceId": event["LogicalResourceId"],
+                  "Data": data
+              }
+
+              json_response_body = json.dumps(response_body)
+
+              print(f"Response Body: {json_response_body}")
+
+              try:
+                  # Parse the ResponseURL to extract host and path
+                  url_parts = event["ResponseURL"].split("/")
+                  host = url_parts[2]
+                  path = "/" + "/".join(url_parts[3:])
+
+                  # Create an HTTP connection
+                  connection = http.client.HTTPSConnection(host)
+                  headers = {"Content-Type": ""}
+
+                  # Send the PUT request
+                  connection.request("PUT", path, body=json_response_body, headers=headers)
+                  response = connection.getresponse()
+                  print(f"CloudFormation response status: {response.status}")
+                  print(f"CloudFormation response reason: {response.reason}")
+                  connection.close()
+              except Exception as e:
+                  print(f"Error sending CloudFormation response: {e}")
+
+  # IAM Role for Lambda Function
+  SSOHandlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SSOHandlerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sso-admin:*
+                  - sso:*
+                  - identitystore:*
+                  - organizations:*
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  # Custom Resource to Trigger Lambda Function
+  SSOHandler:
+    Type: Custom::SSOHandler
+    Properties:
+      ServiceToken: !GetAtt SSOHandlerFunction.Arn
+      Username: !Ref Username
+      Password: !Ref Password
+      EmailAddress: !Ref EmailAddress
+      FirstName: !Ref FirstName
+      LastName: !Ref LastName
+      DisplayName: !Ref DisplayName
+      GroupName: !Ref GroupName
+      PermissionSetName: !Ref PermissionSetName
+      PermissionSetRole: !Ref PermissionSetRole
+
+# Outputs:
+#   SSOLoginURL:
+#     Description: The SSO Login URL
+#     Value: !GetAtt SSOHandler.Data.SSOLoginURL
+#   OneTimePassword:
+#     Description: The one-time password for the user
+#     Value: !GetAtt SSOHandler.Data.OneTimePassword
