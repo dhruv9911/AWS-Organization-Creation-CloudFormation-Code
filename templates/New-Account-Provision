@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  ManagementAccountId:
+    Type: String
+    Description: The AWS account ID of the management account.
+    Default: 332734770702
+  NewAccountName:
+    Type: String
+    Description: The name for the new AWS account.
+    Default: Production-1
+  NewAccountEmail:
+    Type: String
+    Description: The email address for the new AWS account.
+    Default: productionworkolad@gmail.com
+  RootId:
+    Type: String
+    Description: The Root ID of your AWS Organization.
+    Default: r-kueu
+  ExistingOUId:
+    Type: String
+    Description: The ID of the existing Organizational Unit (Optional).
+    Default: '' # Empty means no existing OU placement
+#      - ou-kueu-dim9hdj4  ## Logging OU ID
+#      - ou-kueu-1hn32k5a  ## Security OU ID
+#      - ou-kueu-n6u6j4w9  ## SharingNetworking OU ID
+  NewOUName:
+    Type: String
+    Description: The name for the new Organizational Unit (Optional).
+    Default: 'Production'  # Empty means no new OU creation
+
+Conditions:
+  CreateNewOU: !Not [ !Equals [ !Ref NewOUName, '' ] ]
+  PlaceInExistingOU: !Not [ !Equals [ !Ref ExistingOUId, '' ] ]
+
+Resources:
+  NewAccount:
+    Type: AWS::Organizations::Account
+    Properties:
+      AccountName: !Ref NewAccountName
+      Email: !Ref NewAccountEmail
+      ParentIds:
+        - !If 
+          - CreateNewOU
+          - !GetAtt NewOU.Id
+          - !If 
+              - PlaceInExistingOU
+              - !Ref ExistingOUId
+              - !Ref RootId
+
+  NewOU:
+    Type: AWS::Organizations::OrganizationalUnit
+    Condition: CreateNewOU
+    Properties:
+      Name: !Ref NewOUName
+      ParentId: !Ref RootId
