@@ -83,7 +83,7 @@ Resources:
     Properties:
       FeatureSet: ALL  # This enables all policy types
 
-  LambdaExecutionRole:
+  LambdaExecutionRoleForfetchRootID:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -100,7 +100,7 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - organizations:EnablePolicyType
+                  - organizations:*
                 Resource: '*'
               - Effect: Allow
                 Action:
