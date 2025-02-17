@@ -83,7 +83,7 @@ Resources:
     Properties:
       FeatureSet: ALL  # This enables all policy types
 
-  LambdaExecutionRoleForfetchRootID:
+  LambdaExecutionRoleForfetchSCPID:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -113,7 +113,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       Handler: index.lambda_handler
-      Role: !GetAtt LambdaExecutionRoleForfetchRootID.Arn
+      Role: !GetAtt LambdaExecutionRoleForfetchSCPID.Arn
       Runtime: python3.9
       Timeout: 30
       Environment:
