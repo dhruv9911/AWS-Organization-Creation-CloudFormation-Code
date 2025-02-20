@@ -1,0 +1,220 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Control Tower Landing Zone Setup with Required Prerequisites'
+
+# -------------------------- PARAMETERS --------------------------
+Parameters:
+  LoggingAccountEmail:
+    Type: String
+    Description: The email Id for centralized logging account
+    Default: controlemail053@gmail.com
+  LoggingAccountName:
+    Type: String
+    Description: Name for centralized logging account
+    Default: Logging-Account
+  SecurityAccountEmail:
+    Type: String
+    Description: The email Id for security roles account
+    Default: controlemail78@gmail.com
+  SecurityAccountName:
+    Type: String
+    Description: Name for security roles account
+    Default: Security-Account
+  Version:
+    Type: String
+    Description: The version number of the Landing Zone.
+    Default: '3.2'
+  GovernedRegions:
+    Type: CommaDelimitedList
+    Description: List of AWS regions to be governed by Control Tower.
+    Default: 'ap-south-1'
+  SecurityOuName:
+    Type: String
+    Description: Name of the Security Organizational Unit (OU).
+    Default: 'Security'
+  SandboxOuName:
+    Type: String
+    Description: Name of the Sandbox Organizational Unit (OU).
+    Default: 'Sandbox'
+  LoggingBucketRetentionPeriod:
+    Type: Number
+    Description: Retention period (in days) for the centralized logging bucket.
+    Default: 365
+  AccessLoggingBucketRetentionPeriod:
+    Type: Number
+    Description: Retention period (in days) for the access logging bucket.
+    Default: 365
+
+# -------------------------- RESOURCES --------------------------
+Resources:
+
+  # Create AWS Organizations (Required for Control Tower)
+  MyOrganization:
+    Type: 'AWS::Organizations::Organization'
+    Properties:
+      FeatureSet: ALL  # Required for Control Tower
+
+  # Create Centralized Logging Account
+  LoggingAccount:
+    Type: 'AWS::Organizations::Account'
+    Properties:
+      AccountName: !Ref LoggingAccountName
+      Email: !Ref LoggingAccountEmail
+    DependsOn: MyOrganization
+
+  # Create Security Account
+  SecurityAccount:
+    Type: 'AWS::Organizations::Account'
+    Properties:
+      AccountName: !Ref SecurityAccountName
+      Email: !Ref SecurityAccountEmail
+    DependsOn: MyOrganization
+
+  # IAM Role for AWS Control Tower Admin
+  AWSControlTowerAdmin:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: AWSControlTowerAdmin
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: controltower.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: '/service-role/'
+      ManagedPolicyArns:
+        - !Sub >-
+          arn:${AWS::Partition}:iam::aws:policy/service-role/AWSControlTowerServiceRolePolicy
+  AWSControlTowerAdminPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: AWSControlTowerAdminPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: 'ec2:DescribeAvailabilityZones'
+            Resource: '*'
+      Roles:
+        - !Ref AWSControlTowerAdmin
+  AWSControlTowerCloudTrailRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: AWSControlTowerCloudTrailRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: '/service-role/'
+  AWSControlTowerCloudTrailRolePolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: AWSControlTowerCloudTrailRolePolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource: !Sub >-
+              arn:${AWS::Partition}:logs:*:*:log-group:aws-controltower/CloudTrailLogs:*
+            Effect: Allow
+      Roles:
+        - !Ref AWSControlTowerCloudTrailRole
+  AWSControlTowerConfigAggregatorRoleForOrganizations:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: AWSControlTowerConfigAggregatorRoleForOrganizations
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: '/service-role/'
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSConfigRoleForOrganizations
+  AWSControlTowerStackSetRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: AWSControlTowerStackSetRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: '/service-role/'
+  AWSControlTowerStackSetRolePolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: AWSControlTowerStackSetRolePolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Resource: !Sub 'arn:${AWS::Partition}:iam::*:role/AWSControlTowerExecution'
+            Effect: Allow
+      Roles:
+        - !Ref AWSControlTowerStackSetRole
+
+
+  # AWS Control Tower Landing Zone Setup
+  MyLandingZone:
+    Type: 'AWS::ControlTower::LandingZone'
+    DependsOn: 
+      - AWSControlTowerAdmin
+      - LoggingAccount
+      - SecurityAccount
+      - AWSControlTowerCloudTrailRole
+      - AWSControlTowerConfigAggregatorRoleForOrganizations
+      - AWSControlTowerStackSetRole
+    Properties:
+      Version: !Ref Version
+      Tags:
+        - Key: "Environment"
+          Value: "Production"
+        - Key: "Project"
+          Value: "LandingZoneSetup"
+      Manifest:
+        governedRegions: !Ref GovernedRegions
+        organizationStructure:
+          security:
+            name: !Ref SecurityOuName
+          sandbox:
+            name: !Ref SandboxOuName
+        centralizedLogging:
+          accountId: !GetAtt LoggingAccount.AccountId
+          configurations:
+            loggingBucket:
+              retentionDays: !Ref LoggingBucketRetentionPeriod
+            accessLoggingBucket:
+              retentionDays: !Ref AccessLoggingBucketRetentionPeriod
+            enabled: true
+        securityRoles:
+          accountId: !GetAtt SecurityAccount.AccountId
+          accessManagement:
+            enabled: true
+
+# -------------------------- OUTPUTS --------------------------
+Outputs:
+  LogAccountId:
+    Description: "The Account ID of the Centralized Logging Account"
+    Value: !GetAtt LoggingAccount.AccountId
+    Export:
+      Name: LogAccountId
+
+  SecurityAccountId:
+    Description: "The Account ID of the Security Account"
+    Value: !GetAtt SecurityAccount.AccountId
+    Export:
+      Name: SecurityAccountId
+
+  LandingZoneId:
+    Description: "The ID of the created Landing Zone."
+    Value: !Ref MyLandingZone
