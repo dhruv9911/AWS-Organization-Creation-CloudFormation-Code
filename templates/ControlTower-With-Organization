@@ -22,7 +22,7 @@ Parameters:
   Version:
     Type: String
     Description: The version number of the Landing Zone.
-    Default: '3.2'
+    Default: '3.3'
   GovernedRegions:
     Type: CommaDelimitedList
     Description: List of AWS regions to be governed by Control Tower.
