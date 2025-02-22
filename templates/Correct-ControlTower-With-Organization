@@ -6,7 +6,7 @@ Parameters:
   LoggingAccountEmail:
     Type: String
     Description: The email Id for centralized logging account
-    Default: backupzandingzone@gmail.com
+    Default: productionzandingzone@gmail.com
   LoggingAccountName:
     Type: String
     Description: Name for centralized logging account
@@ -14,7 +14,7 @@ Parameters:
   SecurityAccountEmail:
     Type: String
     Description: The email Id for security roles account
-    Default: landingzonebackup@gmail.com
+    Default: plandingzone@gmail.com
   SecurityAccountName:
     Type: String
     Description: Name for security roles account
