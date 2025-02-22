@@ -6,7 +6,7 @@ Parameters:
   LoggingAccountEmail:
     Type: String
     Description: The email Id for centralized logging account
-    Default: controlemail053@gmail.com
+    Default: landingzoneshashank@gmail.com
   LoggingAccountName:
     Type: String
     Description: Name for centralized logging account
@@ -14,7 +14,7 @@ Parameters:
   SecurityAccountEmail:
     Type: String
     Description: The email Id for security roles account
-    Default: controlemail78@gmail.com
+    Default: landingshashank@gmail.com
   SecurityAccountName:
     Type: String
     Description: Name for security roles account
@@ -190,12 +190,12 @@ Resources:
             name: !Ref SandboxOuName
         centralizedLogging:
           accountId: !GetAtt LoggingAccount.AccountId
-          configurations:
-            loggingBucket:
-              retentionDays: !Ref LoggingBucketRetentionPeriod
-            accessLoggingBucket:
-              retentionDays: !Ref AccessLoggingBucketRetentionPeriod
-            enabled: true
+          # configurations:
+          #   loggingBucket:
+          #     retentionDays: !Ref LoggingBucketRetentionPeriod
+          #   accessLoggingBucket:
+          #     retentionDays: !Ref AccessLoggingBucketRetentionPeriod
+          #   enabled: true
         securityRoles:
           accountId: !GetAtt SecurityAccount.AccountId
           accessManagement:
